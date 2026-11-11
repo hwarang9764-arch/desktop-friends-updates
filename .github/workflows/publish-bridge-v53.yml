@@ -1,0 +1,61 @@
+name: Publish Desktop Friends v0.0.1.9.53 bridge to GitHub Releases
+
+on:
+  workflow_dispatch:
+    inputs:
+      supabase_project_url:
+        description: 'Project URL, e.g. https://abc123.supabase.co (no key required)'
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and verify the bridge installer from public Supabase storage
+        env:
+          PROJECT_URL: ${{ inputs.supabase_project_url }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, re, urllib.request
+          project = os.environ['PROJECT_URL'].strip().rstrip('/')
+          if not re.fullmatch(r'https://[a-z0-9-]+\.supabase\.co', project):
+              raise SystemExit('Invalid Supabase project URL. Use https://<project>.supabase.co')
+          version = '0.0.1.9.53'
+          installer = f'DesktopFriends_Setup_v{version}.exe'
+          directory = f'{project}/storage/v1/object/public/df-releases/'
+          expected_sha = '744ce35558c63d9018e0d9f1ea94644cb60f99b5a474674bb3042eeb13224843'
+          expected_manifest = {'version': version, 'file': installer, 'sha256': expected_sha}
+          def get(name, limit):
+              req = urllib.request.Request(directory + name, headers={'User-Agent': 'DesktopFriends-ReleaseBridge/1.0'})
+              with urllib.request.urlopen(req, timeout=90) as response:
+                  content = response.read(limit + 1)
+              if len(content) > limit:
+                  raise SystemExit(f'File too large: {name}')
+              return content
+          live_manifest = json.loads(get('manifest.json', 4096).decode('utf-8-sig'))
+          if any(str(live_manifest.get(k, '')).lower() != str(v).lower() for k,v in expected_manifest.items()):
+              raise SystemExit('Supabase manifest does not match approved v0.0.1.9.53 release. Upload the correct manifest last.')
+          exe = get(installer, 40_000_000)
+          if len(exe) < 100_000 or exe[:2] != b'MZ':
+              raise SystemExit('Installer does not look like a Windows executable.')
+          digest = hashlib.sha256(exe).hexdigest()
+          if digest != expected_sha:
+              raise SystemExit(f'Installer SHA-256 mismatch: {digest}')
+          pathlib.Path(installer).write_bytes(exe)
+          pathlib.Path('manifest.json').write_text(json.dumps(expected_manifest, indent=2) + '\n')
+          print(f'Verified {installer}: {len(exe)} bytes, SHA256={digest}')
+          PY
+      - name: Publish approved installer and manifest to GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.0.1.9.53 \
+            DesktopFriends_Setup_v0.0.1.9.53.exe manifest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --title 'Desktop Friends v0.0.1.9.53' \
+            --notes 'GitHub updater bridge and Medusa motion patch. SHA-256 verified before publication.' \
+            --latest
