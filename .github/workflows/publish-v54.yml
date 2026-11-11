@@ -1,0 +1,50 @@
+name: Publish Desktop Friends v0.0.1.9.54 to GitHub Releases
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and SHA-256 verify the approved installer from Supabase
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, pathlib, urllib.request
+          base='https://tnjqoleuvojtabqzqzre.supabase.co/storage/v1/object/public/df-releases/'
+          version='0.0.1.9.54'
+          filename='DesktopFriends_Setup_v'+version+'.exe'
+          sha='1d2784695366c403a15f694144f0f9a2f5c6911cb619cf7880e3e860d885d8c4'
+          def read(name, maxbytes):
+              request=urllib.request.Request(base+name,headers={'User-Agent':'DesktopFriends-UpdatePublisher/1.0'})
+              with urllib.request.urlopen(request,timeout=90) as res:
+                  content=res.read(maxbytes+1)
+              if len(content)>maxbytes:
+                  raise SystemExit('Oversized file: '+name)
+              return content
+          manifest=json.loads(read('manifest.json',4096).decode('utf-8-sig'))
+          expected={'version':version,'file':filename,'sha256':sha}
+          for key, value in expected.items():
+              if str(manifest.get(key,'')).lower()!=value.lower():
+                  raise SystemExit('Wrong Supabase manifest ('+key+'); upload v54 EXE first, v54 manifest last.')
+          binary=read(filename,40_000_000)
+          actual=hashlib.sha256(binary).hexdigest()
+          if binary[:2]!=b'MZ' or actual!=sha:
+              raise SystemExit('Invalid or mismatched Windows EXE. SHA256='+actual)
+          pathlib.Path(filename).write_bytes(binary)
+          pathlib.Path('manifest.json').write_text(json.dumps(expected,indent=2)+'\n')
+          print('Verified '+filename+' SHA256='+sha)
+          PY
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create v0.0.1.9.54 \
+            DesktopFriends_Setup_v0.0.1.9.54.exe manifest.json \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "Desktop Friends v0.0.1.9.54" \
+            --notes "Medusa right-facing walk animation and Greek stone bench update. Existing other motions unchanged." \
+            --latest
