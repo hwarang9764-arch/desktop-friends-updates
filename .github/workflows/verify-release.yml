@@ -1,0 +1,44 @@
+name: Verify GitHub-only Desktop Friends Release
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Existing GitHub Release tag, e.g. v0.0.1.9.53'
+        required: true
+        type: string
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download only GitHub Release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          mkdir -p verified
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir verified --pattern 'manifest.json' --pattern 'DesktopFriends_Setup_v*.exe'
+      - name: Verify version, binary and SHA-256
+        env:
+          TAG: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,os,pathlib,re
+          root=pathlib.Path('verified')
+          tag=os.environ['TAG']
+          if not re.fullmatch(r'v\d+(?:\.\d+){2,4}',tag):raise SystemExit('Invalid tag format.')
+          m=json.loads((root/'manifest.json').read_text(encoding='utf-8-sig'))
+          version=tag[1:]
+          filename='DesktopFriends_Setup_v'+version+'.exe'
+          if m.get('version')!=version or m.get('file')!=filename:
+              raise SystemExit('The release tag and manifest version/name do not match.')
+          exe=root/filename
+          if not exe.is_file() or exe.stat().st_size<100_000 or exe.open('rb').read(2)!=b'MZ':
+              raise SystemExit('Missing or invalid Windows installer.')
+          sha=hashlib.file_digest(exe.open('rb'),'sha256').hexdigest()
+          if sha.lower()!=str(m.get('sha256','')).lower():raise SystemExit('SHA-256 mismatch.')
+          print('Verified GitHub-only release '+tag+' with SHA256 '+sha)
+          PY
